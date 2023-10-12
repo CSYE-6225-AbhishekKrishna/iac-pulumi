@@ -1,0 +1,16 @@
+config:
+  aws:region: us-west-2
+  vpcCidr: "10.0.0.0/16"
+  vpcName: "csye6225-vpc"
+  igwName: "csye6225-igw"
+  destinationCidrBlock: "0.0.0.0/0"
+  publicSubnetPrefix: "public-subnet- "
+  privateSubnetPrefix: "private-subnet- "
+  publicSubnetAssociation: "public-subnet-association- "
+  privateSubnetAssociation: "private-subnet-association- "
+  publicRouteTableName: "public-route-table"
+  privateRouteTableName: "private-route-table"
+
+  publicCidrBlocks: '["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]'
+  privateCidrBlocks: '["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]'
+
