@@ -1,16 +1,23 @@
 config:
-  aws:region: us-west-2
-  vpcCidr: "10.0.0.0/16"
-  vpcName: "csye6225-vpc"
-  igwName: "csye6225-igw"
-  destinationCidrBlock: "0.0.0.0/0"
-  publicSubnetPrefix: "public-subnet- "
-  privateSubnetPrefix: "private-subnet- "
-  publicSubnetAssociation: "public-subnet-association- "
-  privateSubnetAssociation: "private-subnet-association- "
-  publicRouteTableName: "public-route-table"
-  privateRouteTableName: "private-route-table"
+  aws:profile: dev
+  aws:region: us-east-1
+  iam-pulumi:amiId: ami-0836b3d2a25300785
+  iam-pulumi:baseCidrBlock: 10.0.0.0/18
+  iam-pulumi:destinationCidrBlock: 0.0.0.0/0
+  iam-pulumi:igwName: csye6225-igw
+  iam-pulumi:port22: "22"
+  iam-pulumi:port80: "80"
+  iam-pulumi:port443: "443"
+  iam-pulumi:port3001: "3001"
+  iam-pulumi:privateRouteTableName: private-route-table
+  iam-pulumi:privateSubnetAssociation: 'private-subnet-association- '
+  iam-pulumi:privateSubnetPrefix: 'private-subnet- '
+  iam-pulumi:publicRouteTableName: public-route-table
+  iam-pulumi:publicSubnetAssociation: 'public-subnet-association- '
+  iam-pulumi:publicSubnetPrefix: 'public-subnet- '
+  iam-pulumi:vpcCidr: 10.0.0.0/16
+  iam-pulumi:vpcName: csye6225-vpc
 
-  publicCidrBlocks: '["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]'
-  privateCidrBlocks: '["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]'
+# publicCidrBlocks: '["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]'
 
+# privateCidrBlocks: '["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]'
