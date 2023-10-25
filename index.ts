@@ -24,7 +24,6 @@ const complete_availabilityZones = pulumi.output(aws.getAvailabilityZones({
 
 const availabilityZones = complete_availabilityZones.apply(az => az.names.slice(0, 3));
 
- 
 
 // Function to calculate the new subnet mask
 function calculateNewSubnetMask(vpcMask: number, numSubnets: number): number {
@@ -40,7 +39,6 @@ function ipToInt(ip: string): number {
     return (octets[0] << 24) + (octets[1] << 16) + (octets[2] << 8) + octets[3];
 }
 
- 
 
 function intToIp(int: number): string {
     return [(int >>> 24) & 255, (int >>> 16) & 255, (int >>> 8) & 255, int & 255].join('.');
@@ -214,6 +212,7 @@ ingressRules.forEach((rule, index) => {
     });
 });
 
+
 const egressRules = [
     {
         protocol: "-1",
@@ -321,9 +320,9 @@ fi
 
 const instance = new aws.ec2.Instance("myEc2Instance", {
     ami: amiId, 
-    instanceType: "t2.micro", 
+    instanceType: "t2.micro",
     vpcSecurityGroupIds: [applicationSecurityGroup.id], 
-    subnetId: publicSubnets[0].id,
+    subnetId: publicSubnets[0].id, 
     rootBlockDevice: {
         volumeSize: 25,
         volumeType: "gp2",
@@ -338,4 +337,3 @@ const instance = new aws.ec2.Instance("myEc2Instance", {
 
 export const rdsParameterGroupId = rdsParameterGroup.id;
 export const ec2InstanceId = instance.id;
-
