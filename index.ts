@@ -24,7 +24,6 @@ const complete_availabilityZones = pulumi.output(aws.getAvailabilityZones({
 
 const availabilityZones = complete_availabilityZones.apply(az => az.names.slice(0, 3));
 
- 
 
 // Function to calculate the new subnet mask
 function calculateNewSubnetMask(vpcMask: number, numSubnets: number): number {
@@ -40,7 +39,6 @@ function ipToInt(ip: string): number {
     return (octets[0] << 24) + (octets[1] << 16) + (octets[2] << 8) + octets[3];
 }
 
- 
 
 function intToIp(int: number): string {
     return [(int >>> 24) & 255, (int >>> 16) & 255, (int >>> 8) & 255, int & 255].join('.');
@@ -214,6 +212,28 @@ ingressRules.forEach((rule, index) => {
     });
 });
 
+
+const egressRules = [
+    {
+        protocol: "-1",
+        fromPort: 0,
+        toPort: 0,
+        cidrBlocks: ["0.0.0.0/0"],
+    },
+];
+
+egressRules.forEach((rule, index) => {
+    new aws.ec2.SecurityGroupRule(`appSecurityGroupEgressRule${index}`, {
+        securityGroupId: applicationSecurityGroup.id,
+        type: "egress",
+        fromPort: rule.fromPort,
+        toPort: rule.toPort,
+        protocol: rule.protocol,
+        cidrBlocks: rule.cidrBlocks,
+    });
+});
+
+
 let rawKeyContent: string;
 try {
     rawKeyContent = fs.readFileSync("/Users/abhik/.ssh/myawskey.pub", 'utf8').trim();
@@ -232,29 +252,88 @@ const keyPair = new aws.ec2.KeyPair("mykeypair", {
 const keyPairName = keyPair.id.apply(id => id);
 
 
+// Define a DB security group
+const dbSecurityGroup = new aws.ec2.SecurityGroup("dbSecurityGroup", {
+    vpcId: vpc.id, // Use the VPC you've defined earlier
+    description: "Security group for RDS instances",
+});
+
+// Define ingress rule to allow traffic on port 5432 from the application security group
+new aws.ec2.SecurityGroupRule("dbIngressRule", {
+    securityGroupId: dbSecurityGroup.id,
+    type: "ingress",
+    fromPort: 5432,
+    toPort: 5432,
+    protocol: "tcp",
+    sourceSecurityGroupId: applicationSecurityGroup.id,
+});
+
+
+const rdsParameterGroupName = "csye6225-postgres15-param-group"; // parameter group name
+
+const rdsParameterGroup = new aws.rds.ParameterGroup(rdsParameterGroupName, {
+    family: "postgres15", // PostgreSQL version
+    description: "Custom parameter group for PostgreSQL 15", 
+});
+
+// Private subnet group created with privateSubnets[0].id
+const dbSubnetGroup = new aws.rds.SubnetGroup("db-subnet-group", {
+    description: "DB subnet group for RDS",
+    subnetIds: [ privateSubnets[0].id, privateSubnets[1].id ],
+});
+
+export const dbSubnetGroupName = dbSubnetGroup.name;
+
+const rdsInstance = new aws.rds.Instance("csye6225-rds-instance-postgres", {
+    allocatedStorage: 20,
+    storageType: "gp2",
+    engine: "postgres", 
+    engineVersion: "15", 
+    instanceClass: "db.t3.micro", 
+    dbName: "postgres",
+    // name: "csye6225",
+    username: "postgres",
+    password: "Pa55w0rd",
+    skipFinalSnapshot: true,
+    vpcSecurityGroupIds: [dbSecurityGroup.id], 
+    dbSubnetGroupName: dbSubnetGroup.name, 
+    parameterGroupName: rdsParameterGroup.name, // Attach the parameter group
+    publiclyAccessible: false,
+});
+
+const userData = pulumi.interpolate`#!/bin/bash
+# Define the file path
+env_file="/home/admin/webapp/.env"
+
+# Check if the file exists; create or append accordingly
+if [ -f "$env_file" ]; then
+    echo "DB_HOST=${rdsInstance.address}" >> "$env_file"
+    echo "DB_USERNAME=${rdsInstance.username}" >> "$env_file"
+    echo "DB_PASSWORD=${rdsInstance.password}" >> "$env_file"
+else
+    echo "DB_HOST=${rdsInstance.address}" > "$env_file"
+    echo "DB_USERNAME=${rdsInstance.username}" >> "$env_file"
+    echo "DB_PASSWORD=${rdsInstance.password}" >> "$env_file"
+    echo "${rdsInstance.endpoint}"
+fi
+`;
+
 const instance = new aws.ec2.Instance("myEc2Instance", {
-    ami: amiId, // Replace with your custom AMI ID
-    instanceType: "t2.micro", // Choose the desired instance type
-    vpcSecurityGroupIds: [applicationSecurityGroup.id], // Attach the app security group
-    subnetId: publicSubnets[0].id, // Choose the appropriate subnet
+    ami: amiId, 
+    instanceType: "t2.micro",
+    vpcSecurityGroupIds: [applicationSecurityGroup.id], 
+    subnetId: publicSubnets[0].id, 
     rootBlockDevice: {
         volumeSize: 25,
         volumeType: "gp2",
         deleteOnTermination: true,
     },
-    // ebsBlockDevices: [
-    //     {
-    //         deviceName: "/dev/sdb", 
-    //         volumeSize: 25,
-    //         volumeType: "gp2",
-    //         deleteOnTermination: true,
-    //     },
-    //     // Add additional EBS block devices if needed
-    // ],
-
     disableApiTermination: false,
     keyName: keyPairName,
-    tags: { Name: "MyEC2Instance" }, // Set an appropriate name
+    userData: userData,
+    tags: { Name: "MyEC2Instance" }, 
 });
 
+
+export const rdsParameterGroupId = rdsParameterGroup.id;
 export const ec2InstanceId = instance.id;
