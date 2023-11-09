@@ -303,7 +303,7 @@ const rdsInstance = new aws.rds.Instance("csye6225-rds-instance-postgres", {
 
 const userData = pulumi.interpolate`#!/bin/bash
 # Define the file path
-env_file="/home/admin/webapp/.env"
+env_file="/opt/csye6225/webapp/.env"
 
 # Check if the file exists; create or append accordingly
 if [ -f "$env_file" ]; then
@@ -316,7 +316,33 @@ else
     echo "DB_PASSWORD=${rdsInstance.password}" >> "$env_file"
     echo "${rdsInstance.endpoint}"
 fi
+
+# Fetch the latest CloudWatch agent configuration and start the agent
+sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a start
+
+sudo systemctl start myapp-systemd.service
+
+sudo chown -R csye6225:csye6225 /opt/csye6225/webapp
+
 `;
+
+// Define the IAM role with CloudWatchAgentServer policy
+const role = new aws.iam.Role("CloudwatchEC2role", {
+    assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({
+        Service: "ec2.amazonaws.com",
+    }),
+});
+
+// Attach the CloudWatchAgentServer policy to the role
+const policyAttachment = new aws.iam.RolePolicyAttachment("CloudWatchAgentServerPolicyAttachment", {
+    role: role.name,
+    policyArn: "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+});
+
+const instanceProfile = new aws.iam.InstanceProfile("ec2InstanceProfile", {
+    role: role.name,
+});
 
 const instance = new aws.ec2.Instance("myEc2Instance", {
     ami: amiId, 
@@ -332,8 +358,23 @@ const instance = new aws.ec2.Instance("myEc2Instance", {
     keyName: keyPairName,
     userData: userData,
     tags: { Name: "MyEC2Instance" }, 
+    iamInstanceProfile: instanceProfile.name,
 });
 
+const hostedZone = aws.route53.getZone({ name: "dev.abhishekkrishna.cloud." }, { async: true }).then(zone => zone.id);
+
+// Create a new A record after the EC2 instance and hosted zone ID are available
+hostedZone.then(zoneId => {
+    new aws.route53.Record(`dev.abhishekkrishna.cloud`, {
+        zoneId: zoneId,
+        name: `dev.abhishekkrishna.cloud`,
+        type: "A",
+        ttl: 300,
+        records: [instance.publicIp],
+    });
+});
 
 export const rdsParameterGroupId = rdsParameterGroup.id;
 export const ec2InstanceId = instance.id;
+
+
