@@ -167,72 +167,47 @@ export const vpcId = vpc.id;
 export const publicSubnetIds = publicSubnets.apply(subnets => subnets.map(subnet => subnet.id));
 export const privateSubnetIds = privateSubnets.apply(subnets => subnets.map(subnet => subnet.id));
 
-const applicationSecurityGroup = new aws.ec2.SecurityGroup("applicationSecurityGroup", {
+export const loadBalancerSecurityGroup = new aws.ec2.SecurityGroup("loadbalancer-security-group", {
+    description: "Security group for Load Balancer",
     vpcId: vpc.id,
-    description: "Security group for web application instances",
+    ingress: [
+        { protocol: "tcp", fromPort: 80, toPort: 80, cidrBlocks: ["0.0.0.0/0"] },
+        { protocol: "tcp", fromPort: 443, toPort: 443, cidrBlocks: ["0.0.0.0/0"] },
+    ],
+    egress: [{ protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] }],
+    tags: { Name: "Csye6255-loadbalancer-security-group" },
 });
 
-// Define ingress rules for the security group
-const ingressRules = [
-    {
-        fromPort: 22,
-        toPort: 22,
-        protocol: "tcp",
-        cidrBlocks: [destinationCidrBlock], // Allow SSH from anywhere
+// Create a new security group
+export const applicationSecurityGroup = new aws.ec2.SecurityGroup("applicationSecurityGroup", {
+    description: "Enable access to application",
+    tags: {
+        Name: "Csye6255-abhishek-security group",
     },
-    {
-        fromPort: 80,
-        toPort: 80,
-        protocol: "tcp",
-        cidrBlocks: [destinationCidrBlock], // Allow HTTP from anywhere
-    },
-    {
-        fromPort: 443,
-        toPort: 443,
-        protocol: "tcp",
-        cidrBlocks: [destinationCidrBlock], // Allow HTTPS from anywhere
-    },
-    // Application port 3001
-    {
-        fromPort: 3001,
-        toPort: 3001,
-        protocol: "tcp",
-        cidrBlocks: [destinationCidrBlock], // Allow HTTPS from anywhere
-    },
-];
+    vpcId: vpc.id,
+    ingress: [
+        // SSH access
+        {
+            protocol: "tcp",
+            fromPort: 22,
+            toPort: 22,
+            cidrBlocks: ["0.0.0.0/0"]
 
-ingressRules.forEach((rule, index) => {
-    new aws.ec2.SecurityGroupRule(`appSecurityGroupRule${index}`, {
-        securityGroupId: applicationSecurityGroup.id,
-        type: "ingress",
-        fromPort: rule.fromPort,
-        toPort: rule.toPort,
-        protocol: rule.protocol,
-        cidrBlocks: rule.cidrBlocks,
-    });
-});
-
-
-const egressRules = [
-    {
+        },
+        {
+            protocol: "tcp",
+            fromPort: 3001,
+            toPort: 3001,   
+            securityGroups: [loadBalancerSecurityGroup.id],
+        }
+    ],
+    egress: [{
         protocol: "-1",
         fromPort: 0,
         toPort: 0,
         cidrBlocks: ["0.0.0.0/0"],
-    },
-];
-
-egressRules.forEach((rule, index) => {
-    new aws.ec2.SecurityGroupRule(`appSecurityGroupEgressRule${index}`, {
-        securityGroupId: applicationSecurityGroup.id,
-        type: "egress",
-        fromPort: rule.fromPort,
-        toPort: rule.toPort,
-        protocol: rule.protocol,
-        cidrBlocks: rule.cidrBlocks,
-    });
-});
-
+    }]
+},{dependsOn: loadBalancerSecurityGroup });
 
 let rawKeyContent: string;
 try {
@@ -247,7 +222,7 @@ const publicKeyContent = keyParts.length > 1 ? `${keyParts[0]} ${keyParts[1]}` :
 
 const keyPair = new aws.ec2.KeyPair("mykeypair", {
     publicKey: publicKeyContent,
-});
+}); 
 
 const keyPairName = keyPair.id.apply(id => id);
 
@@ -291,7 +266,6 @@ const rdsInstance = new aws.rds.Instance("csye6225-rds-instance-postgres", {
     engineVersion: "15", 
     instanceClass: "db.t3.micro", 
     dbName: "postgres",
-    // name: "csye6225",
     username: "postgres",
     password: "Pa55w0rd",
     skipFinalSnapshot: true,
@@ -344,37 +318,159 @@ const instanceProfile = new aws.iam.InstanceProfile("ec2InstanceProfile", {
     role: role.name,
 });
 
-const instance = new aws.ec2.Instance("myEc2Instance", {
-    ami: amiId, 
-    instanceType: "t2.micro",
-    vpcSecurityGroupIds: [applicationSecurityGroup.id], 
-    subnetId: publicSubnets[0].id, 
-    rootBlockDevice: {
-        volumeSize: 25,
-        volumeType: "gp2",
-        deleteOnTermination: true,
-    },
-    disableApiTermination: false,
-    keyName: keyPairName,
-    userData: userData,
-    tags: { Name: "MyEC2Instance" }, 
-    iamInstanceProfile: instanceProfile.name,
+export const alb = new aws.lb.LoadBalancer("app-lb", {
+    internal: false,
+    loadBalancerType: "application",
+    securityGroups: [loadBalancerSecurityGroup.id],
+    subnets: publicSubnets.apply(subnets => subnets.map(subnet => subnet.id)),
+    enableDeletionProtection: false,
 });
 
-const hostedZone = aws.route53.getZone({ name: "dev.abhishekkrishna.cloud." }, { async: true }).then(zone => zone.id);
+const launchTemplate = new aws.ec2.LaunchTemplate("myLaunchTemplate", {
+    name: "my-launch-template",
+    imageId:amiId,
+    description: "My Launch Template",
+    blockDeviceMappings: [{
+        deviceName: "/dev/xvda",
+        ebs: {
+            volumeSize: 25,
+            volumeType: "gp2",
+            deleteOnTermination: 'true',
+        },
+    }],
+    instanceType: "t2.micro",
+    keyName: keyPairName,
+    networkInterfaces: [{
+        deviceIndex: 0,
+        associatePublicIpAddress:  'true',
+        securityGroups: [applicationSecurityGroup.id],
+        subnetId: publicSubnets[0].id,
+    }],
+    tagSpecifications: [{
+        resourceType: "instance",
+        tags: {
+            Name: "Csye6255-Abhishek",
+        },
+    }],
+    userData:  pulumi.interpolate`${userData.apply((s) =>
+        Buffer.from(s).toString("base64")
+      )}`,
+    iamInstanceProfile: {
+        name: instanceProfile.name,
+    },
+    disableApiTermination:false
+},{dependsOn: [keyPair,rdsInstance]});
+
+const targetGroup = new aws.alb.TargetGroup("targetGroup",{
+    port:3001,
+    protocol:'HTTP',
+    vpcId:vpc.id,
+    targetType:'instance',
+    healthCheck:{
+      enabled:true,
+      path:'/healthz',
+      protocol:'HTTP',
+      port:'3001',
+      timeout:25
+  
+    }
+  })
+
+const listener = new aws.alb.Listener("listener",{
+   loadBalancerArn:alb.arn,
+   port:80,
+   defaultActions:[{
+     type:'forward',
+     targetGroupArn:targetGroup.arn
+   }]
+ })
+
+
+   // Create an Auto Scaling group
+const autoScalingGroup = new aws.autoscaling.Group("myAutoScalingGroup", {
+    launchTemplate: {
+        id: launchTemplate.id,
+        version: "$Latest", // Use the latest version of the launch template
+    },
+    minSize: 1,
+    maxSize: 3,
+    desiredCapacity: 1,
+    targetGroupArns:[targetGroup.arn],
+    vpcZoneIdentifiers: [publicSubnets[0].id,publicSubnets[1].id,publicSubnets[2].id], // Subnet IDs where instances will be launched // Get availability zones
+    tags: [{
+        key: "Name",
+        value: "Csye6255-Abhishek",
+        propagateAtLaunch: true,
+    }],
+    // Add your other properties like cooldown, health check, etc. here
+});
+
+// Define scaling policies
+const scaleUpPolicy = new aws.autoscaling.Policy("scaleUpPolicy", {
+    autoscalingGroupName: autoScalingGroup.name,
+    adjustmentType: "ChangeInCapacity",
+    policyType: "SimpleScaling",
+    scalingAdjustment: 1, // Increment by 1
+    cooldown: 60,
+});
+
+const scaleDownPolicy = new aws.autoscaling.Policy("scaleDownPolicy", {
+    autoscalingGroupName: autoScalingGroup.name,
+    adjustmentType: "ChangeInCapacity",
+    policyType: "SimpleScaling",
+    scalingAdjustment: -1, // Decrement by 1
+    cooldown: 300,
+});
+
+// CloudWatch Alarm for Scale Up
+const scaleUpAlarm = new aws.cloudwatch.MetricAlarm("scaleUpAlarm", {
+    comparisonOperator: "GreaterThanOrEqualToThreshold",
+    evaluationPeriods: 1,
+    metricName: "CPUUtilization",
+    namespace: "AWS/EC2",
+    period: 60,
+    statistic: "Average",
+    threshold: 5, // Adjust as needed
+    alarmActions: [scaleUpPolicy.arn],
+    dimensions: {
+        AutoScalingGroupName: autoScalingGroup.name,
+    },
+});
+
+// CloudWatch Alarm for Scale Down
+const scaleDownAlarm = new aws.cloudwatch.MetricAlarm("scaleDownAlarm", {
+    comparisonOperator: "LessThanOrEqualToThreshold",
+    evaluationPeriods: 1,
+    metricName: "CPUUtilization",
+    namespace: "AWS/EC2",
+    period: 60,
+    statistic: "Average",
+    threshold: 3, 
+    alarmActions: [scaleDownPolicy.arn],
+    dimensions: {
+        AutoScalingGroupName: autoScalingGroup.name,
+    },
+});
+const hzName = config.require("hzname");
+const hostedZone = aws.route53.getZone({ name: hzName  }, { async: true });
+// .then(zone => zone.id);
 
 // Create a new A record after the EC2 instance and hosted zone ID are available
 hostedZone.then(zoneId => {
-    new aws.route53.Record(`dev.abhishekkrishna.cloud`, {
-        zoneId: zoneId,
-        name: `dev.abhishekkrishna.cloud`,
+    new aws.route53.Record("Record", {
+        zoneId: zoneId.id,
+        name: zoneId.name,
         type: "A",
-        ttl: 300,
-        records: [instance.publicIp],
+        aliases:[
+            {
+              name:alb.dnsName,
+              zoneId:alb.zoneId,
+              evaluateTargetHealth:true
+            }]
     });
 });
 
 export const rdsParameterGroupId = rdsParameterGroup.id;
-export const ec2InstanceId = instance.id;
+// export const ec2InstanceId = instance.id;
 
 
