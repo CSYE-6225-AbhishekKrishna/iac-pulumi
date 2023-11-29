@@ -1,6 +1,7 @@
 
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
+import * as gcp from "@pulumi/gcp";
 
 import * as fs from "fs";
 
@@ -275,6 +276,216 @@ const rdsInstance = new aws.rds.Instance("csye6225-rds-instance-postgres", {
     publiclyAccessible: false,
 });
 
+// Define the IAM role with CloudWatchAgentServer policy
+const role = new aws.iam.Role("CloudwatchEC2role", {
+    assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({
+        Service: "ec2.amazonaws.com",
+    }),
+});
+
+// Create a Google Cloud Storage bucket
+const bucket = new gcp.storage.Bucket("webapp-abhishek-krishna", {
+    location: "US",
+});
+
+// Create a Google Service Account
+const serviceAccount = new gcp.serviceaccount.Account("csye6225-abhishek", {
+    accountId: "csye6225-abhishek",
+    displayName: "csye6225-abhishek",
+});
+
+const defaultProject = config.require("project"); 
+
+// Assign necessary roles to the service account
+const storageAdminBinding = new gcp.projects.IAMBinding("storage-admin-binding", {
+    project: defaultProject,
+    role: "roles/storage.admin",
+    members: [serviceAccount.email.apply(email => `serviceAccount:${email}`)],
+});
+
+// Create Access Keys for the Service Account
+const serviceAccountKey = new gcp.serviceaccount.Key("csye6225-abhishek-account-key", {
+    serviceAccountId: serviceAccount.name,
+    publicKeyType: "TYPE_X509_PEM_FILE",
+});
+
+// Export the bucket name and service account key
+export const bucketName = bucket.name;
+export const serviceAccountKeyEncoded = pulumi.secret(
+    serviceAccountKey.privateKey.apply(key => Buffer.from(key, 'base64').toString('utf-8'))
+);
+
+// Attach the CloudWatchAgentServer policy to the role
+const policyAttachment = new aws.iam.RolePolicyAttachment("CloudWatchAgentServerPolicyAttachment", {
+    role: role.name,
+    policyArn: "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+});
+
+// Create an SNS Topic
+const snsTopic = new aws.sns.Topic("sns-topic", {
+    displayName: "SNS-Topic", 
+});
+
+// Export the SNS topic ARN
+export const snsTopicArn = snsTopic.arn;
+
+const snsEC2FullAccessPolicyAttachment = new aws.iam.RolePolicyAttachment("snsEC2FullAccessPolicyAttachment", {
+    role: role.name,
+    policyArn: "arn:aws:iam::aws:policy/AmazonSNSFullAccess",
+});
+
+const instanceProfile = new aws.iam.InstanceProfile("ec2InstanceProfile", {
+    role: role.name,
+});
+
+// Attach policy to EC2 SNS role
+const ec2SNSPolicy = new aws.iam.RolePolicy("EC2SNSTopicPolicy", {
+    role: role.name, // Ensure ec2Role is defined
+    policy: snsTopic.arn.apply((arn) => pulumi.interpolate`{
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": "sns:Publish",
+                "Resource": "${arn}"
+            }
+        ]
+    }`),
+});
+
+// Create an IAM role for the Lambda function
+const lambdaRole = new aws.iam.Role("lambdaRole", {
+    assumeRolePolicy: pulumi.output({
+        Version: "2012-10-17",
+        Statement: [{
+            Action: "sts:AssumeRole",
+            Effect: "Allow",
+            Principal: {
+                Service: "lambda.amazonaws.com",
+            },
+        }],
+    }),
+});
+
+const lambdaPolicy = new aws.iam.Policy("lambdaPolicy", {
+    policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+            {
+                Effect: "Allow",
+                Action: [
+                    "ses:SendEmail",
+                    "ses:SendRawEmail"
+                ],
+                Resource: "*" // Specify your SES resource ARN if you want to restrict to specific resources
+            },
+            {
+                Effect: "Allow",
+                Action: [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Scan",
+                    "dynamodb:Query"
+                ],
+                Resource: "*" // Replace with your DynamoDB table ARN
+            },
+            {
+                Effect: "Allow",
+                Action: [
+                    "sts:AssumeRole"
+                ],
+                Resource: "*" // Specify the ARN of the GCP service account role here
+            }
+        ],
+    }),
+});
+
+const rolePolicyAttachment = new aws.iam.RolePolicyAttachment("rolePolicyAttachment", {
+    role: lambdaRole.name,
+    policyArn: lambdaPolicy.arn,
+});
+
+const snsFullAccessPolicyAttachment = new aws.iam.RolePolicyAttachment("snsFullAccessPolicyAttachment", {
+    role: lambdaRole.name,
+    policyArn: "arn:aws:iam::aws:policy/AmazonSNSFullAccess",
+});
+
+const CloudwatchPolicyAttachment = new aws.iam.RolePolicyAttachment("CloudwatchPolicyAttachment", {
+    role: lambdaRole.name,
+    policyArn: "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+});
+
+//Create DynamoDB instance
+const table = new aws.dynamodb.Table("email-list-table", {
+    attributes: [
+        { name: "id", type: "S" }, // Composite primary key (email+timestamp)
+        { name: "email", type: "S" },
+        { name: "timestamp", type: "S" },
+        { name: "status", type: "S" }
+    ],
+    hashKey: "id",
+    billingMode: "PAY_PER_REQUEST",
+    globalSecondaryIndexes: [
+        {
+        name: "EmailIndex",
+        hashKey: "email",
+        projectionType: "ALL", 
+        },
+        {
+            name: "timestampIndex",
+            hashKey: "timestamp",
+            projectionType: "ALL", 
+        },
+        {
+            name: "statusIndex",
+            hashKey: "status",
+            projectionType: "ALL", 
+        }
+]
+});
+
+const serverlesspath = config.require("serverlesspath");
+// Create the Lambda function
+const lambdaFunction = new aws.lambda.Function("lambdaFunction", {
+    name: 'my-lambda-funtion',
+    runtime: aws.lambda.Runtime.NodeJS18dX,
+    handler: "index.handler",
+    code: new pulumi.asset.FileArchive(serverlesspath),
+    role: lambdaRole.arn,
+
+    environment: {
+        variables: {
+            GCP_SERVICE_ACCOUNT_KEY: serviceAccountKeyEncoded,
+            BUCKET_NAME: bucketName,
+            TABLE_NAME: table.name,
+            MAILGUN_API_KEY: config.require("mailgunApiKey"),
+            MAILGUN_DOMAIN: config.require("mailgunDomain"),        
+        },
+    },
+});
+
+
+    // Add SNS trigger to Lambda function
+const lambdaSnsPermission = new aws.lambda.Permission(
+    "lambdaSnsPermission",
+    {
+      action: "lambda:InvokeFunction",
+      function: lambdaFunction.arn,
+      principal: "sns.amazonaws.com",
+      sourceArn: snsTopic.arn,
+    }
+  );
+
+// Subscribe the Lambda function to the SNS topic
+const snsSubscription = new aws.sns.TopicSubscription("snsSubscription", {
+    protocol: "lambda",
+    endpoint: lambdaFunction.arn,
+    topic: snsTopic.arn,
+});
+
+
 const userData = pulumi.interpolate`#!/bin/bash
 # Define the file path
 env_file="/opt/csye6225/webapp/.env"
@@ -284,11 +495,12 @@ if [ -f "$env_file" ]; then
     echo "DB_HOST=${rdsInstance.address}" >> "$env_file"
     echo "DB_USERNAME=${rdsInstance.username}" >> "$env_file"
     echo "DB_PASSWORD=${rdsInstance.password}" >> "$env_file"
+    echo "TOPIC_ARN=${snsTopicArn}" >> "$env_file"
 else
     echo "DB_HOST=${rdsInstance.address}" > "$env_file"
     echo "DB_USERNAME=${rdsInstance.username}" >> "$env_file"
     echo "DB_PASSWORD=${rdsInstance.password}" >> "$env_file"
-    echo "${rdsInstance.endpoint}"
+    echo "TOPIC_ARN=${snsTopicArn}" >> "$env_file"
 fi
 
 # Fetch the latest CloudWatch agent configuration and start the agent
@@ -300,23 +512,6 @@ sudo systemctl start myapp-systemd.service
 sudo chown -R csye6225:csye6225 /opt/csye6225/webapp
 
 `;
-
-// Define the IAM role with CloudWatchAgentServer policy
-const role = new aws.iam.Role("CloudwatchEC2role", {
-    assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({
-        Service: "ec2.amazonaws.com",
-    }),
-});
-
-// Attach the CloudWatchAgentServer policy to the role
-const policyAttachment = new aws.iam.RolePolicyAttachment("CloudWatchAgentServerPolicyAttachment", {
-    role: role.name,
-    policyArn: "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
-});
-
-const instanceProfile = new aws.iam.InstanceProfile("ec2InstanceProfile", {
-    role: role.name,
-});
 
 export const alb = new aws.lb.LoadBalancer("app-lb", {
     internal: false,
