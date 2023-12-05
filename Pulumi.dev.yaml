@@ -1,10 +1,10 @@
 config:
-  aws:profile: dev
+  aws:profile: demo
   aws:region: us-east-1
   gcp:project: abbydev
   iam-pulumi:mailgunApiKey: 7e2c64b37e510c1bed8e7552a6d516c2-30b58138-7118feb7
   iam-pulumi:mailgunDomain: abhishekkrishna.cloud
-  iam-pulumi:amiId: ami-0f56cf49682200efa
+  iam-pulumi:amiId: ami-09f1c5242a2032430
   iam-pulumi:baseCidrBlock: 10.0.0.0/18
   iam-pulumi:destinationCidrBlock: 0.0.0.0/0
   iam-pulumi:igwName: csye6225-igw
@@ -27,5 +27,7 @@ config:
 # publicCidrBlocks: '["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]'
 
 # privateCidrBlocks: '["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]'
-  iam-pulumi:hzname: dev.abhishekkrishna.cloud
+  iam-pulumi:hzname: demo.abhishekkrishna.cloud
+
+  iam-pulumi:certificateArn: arn:aws:acm:us-east-1:047495291400:certificate/76fef0ab-dc1c-4d85-8e92-42b0253ea7bb
   

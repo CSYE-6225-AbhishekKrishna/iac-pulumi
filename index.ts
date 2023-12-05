@@ -571,9 +571,13 @@ const targetGroup = new aws.alb.TargetGroup("targetGroup",{
     }
   })
 
+const certificateArn = config.require("certificateArn");
+
 const listener = new aws.alb.Listener("listener",{
    loadBalancerArn:alb.arn,
-   port:80,
+   port:443,
+   certificateArn:certificateArn,
+   protocol: "HTTPS",
    defaultActions:[{
      type:'forward',
      targetGroupArn:targetGroup.arn
